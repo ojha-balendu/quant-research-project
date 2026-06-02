@@ -25,7 +25,7 @@ def parse_args():
     parser.add_argument(
         "--start",
         type=str,
-        default="2010-01-01",
+        default="2025-01-01",
         help="Start date for download (YYYY-MM-DD).",
     )
     parser.add_argument(
