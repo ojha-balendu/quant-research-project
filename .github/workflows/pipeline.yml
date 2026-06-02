@@ -19,13 +19,24 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install pandas numpy pyarrow requests tqdm plotly joblib yfinance paramiko paramiko
+          pip install pandas numpy pyarrow requests tqdm plotly joblib yfinance paramiko
 
-      - name: Download top 5000 CSV
+      - name: Download ticker list
         run: |
-          # If not in repo, attempt to download it
           if [ ! -f "top_5000_us_by_marketcap.csv" ]; then
-            curl -L -o top_5000_us_by_marketcap.csv https://github.com/yszanwar/phase2_qrt_challenge/releases/download/signals/top_5000_us_by_marketcap.csv || echo "Failed to fetch top 5000 list. yf download might fail if relying on it."
+            curl -L -o top_5000_us_by_marketcap.csv https://github.com/yszanwar/phase2_qrt_challenge/releases/download/signals/top_5000_us_by_marketcap.csv
+            
+            # Validate the download
+            if [ ! -f "top_5000_us_by_marketcap.csv" ] || [ ! -s "top_5000_us_by_marketcap.csv" ]; then
+              echo "ERROR: Failed to download top_5000_us_by_marketcap.csv"
+              exit 1
+            fi
+            
+            # Verify it's a valid CSV with expected columns
+            head -1 "top_5000_us_by_marketcap.csv" | grep -iE 'symbol|ticker' || {
+              echo "ERROR: CSV does not contain 'symbol' or 'ticker' column"
+              exit 1
+            }
           fi
 
       - name: Download Pricing Data
@@ -75,4 +86,3 @@ jobs:
               sftp_host="sftp.qrt.cloud",
           )
           '
-
