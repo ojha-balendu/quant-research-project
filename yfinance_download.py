@@ -47,11 +47,24 @@ def load_tickers(csv_path: str):
     if not path_obj.exists():
         raise FileNotFoundError(f"Ticker CSV not found: {path_obj.resolve()}")
     
-    df = pd.read_csv(path_obj, usecols=["symbol"])
+    # 1. Read the entire CSV (don't restrict usecols yet)
+    df = pd.read_csv(path_obj)
     
-    # Clean the tickers: replace / and . with - for Yahoo Finance compatibility
+    # 2. Normalize all column headers (strip whitespace and make lowercase)
+    df.columns = df.columns.str.strip().str.lower()
+    
+    # 3. Find the right column name dynamically
+    if 'symbol' in df.columns:
+        ticker_col = 'symbol'
+    elif 'ticker' in df.columns:
+        ticker_col = 'ticker'
+    else:
+        # If it STILL fails, this will print the actual columns so you can debug the action logs
+        raise ValueError(f"Could not find a ticker/symbol column. Available columns are: {df.columns.tolist()}")
+    
+    # 4. Clean the tickers: replace / and . with - for Yahoo Finance compatibility
     tickers = (
-        df["symbol"].astype(str)
+        df[ticker_col].astype(str)
         .str.strip()
         .replace("", pd.NA)
         .str.replace("/", "-", regex=False)  # Fixes BRK/A -> BRK-A
