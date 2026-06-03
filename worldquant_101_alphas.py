@@ -143,7 +143,8 @@ if __name__ == "__main__":
             if portfolio.abs().sum().sum() == 0:
                 continue
                 
-            sr, pnl = backtest_portfolio(
+            # Add , *_ to absorb any additional return values
+            sr, pnl, *_ = backtest_portfolio(
                 portfolio, returns.loc[start_date:end_date], 
                 universe.loc[start_date:end_date], False, False
             )
