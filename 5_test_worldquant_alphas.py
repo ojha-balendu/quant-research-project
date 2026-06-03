@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 from scipy.stats import rankdata
 import warnings
-from utils import backtest_portfolio
 
 warnings.filterwarnings("ignore")
 
@@ -13,7 +12,7 @@ warnings.filterwarnings("ignore")
 class WorldQuantAlphas:
     def __init__(self, df_prices, df_returns, df_volume, df_vwap, df_adv20):
         self.open = df_prices['Open']
-        self.close = df_prices['Adj Close'] # Using Adj Close for PnL accuracy
+        self.close = df_prices['Adj Close'] 
         self.high = df_prices['High']
         self.low = df_prices['Low']
         self.volume = df_volume
@@ -43,7 +42,6 @@ class WorldQuantAlphas:
         return self.rank(self.ts_argmax(self.signedpower(val, 2), 5)) - 0.5
 
     def alpha_002(self):
-        # Add 1 to volume to prevent log(0) -inf errors
         term1 = self.rank(self.delta(np.log(self.volume + 1), 2))
         term2 = self.rank((self.close - self.open) / self.open)
         return -1 * self.correlation(term1, term2, 6)
@@ -75,47 +73,34 @@ class WorldQuantAlphas:
         for m in methods:
             alpha_dict[m] = getattr(self, m)()
         
-        # Combine into a MultiIndex DataFrame [feature, ticker]
         features_df = pd.concat(alpha_dict, axis=1)
         features_df.columns.names = ["feature", "ticker"]
         return features_df
 
 # ==========================================
-# 2. Sector-Specific Portfolio Generator
+# 2. Global Sector-Neutral Portfolio Generator
 # ==========================================
-def generate_sector_portfolio_vectorized(
+def generate_global_sector_neutral_portfolio(
     entire_features: pd.DataFrame, universe: pd.DataFrame, 
     start_date: str, end_date: str, signal_column: str, 
-    target_sector: str, sector_mapping: pd.Series
+    sector_mapping: pd.Series
 ):
-    sector_mask = (sector_mapping == target_sector).reindex(universe.columns, fill_value=False)
-    universe_boolean = universe.loc[start_date:end_date].astype(bool) & sector_mask
+    universe_boolean = universe.loc[start_date:end_date].astype(bool)
     
-    # Extract feature using MultiIndex selection
+    # Extract feature 
     signal1 = entire_features.xs(signal_column, axis=1, level=0).loc[start_date:end_date].shift(5)
     signal1 = signal1.where(universe_boolean, np.nan)
     
-    # Cross-sectional rank within the sector
+    # Global cross-sectional rank
     signal1 = signal1.rank(axis=1, method="min", ascending=True)
     
-    # Neutralize by sector (demean across the row)
-    signal1 = signal1.sub(signal1.mean(axis=1), axis=0)
-    signal1 = signal1.div(signal1.abs().sum(axis=1), axis=0)
+    # Neutralize by sector (demean within each sector group)
+    aligned_sectors = sector_mapping.reindex(signal1.columns).fillna('Unknown')
+    signal1 = signal1.sub(signal1.groupby(aligned_sectors, axis=1).transform('mean'), axis=0)
     
+    # Scale global portfolio book to 1.0 (Unit Capital Constraint satisfied)
     portfolio = -1 * signal1.fillna(0)
-    portfolio = portfolio.div(portfolio.abs().sum(axis=1), axis=0).fillna(0)
-    
-    # QRT Safety Check: Ensure no single weight exceeds 5% constraint
-    # Calculate the max absolute weight for each day
-    max_weights = portfolio.abs().max(axis=1)
-    
-    # If any weight exceeds 0.049, create a scale-down factor for that day
-    scale_down_factors = np.where(max_weights > 0.049, 0.049 / max_weights, 1.0)
-    
-    # Multiply the portfolio by the scale-down factors along the time axis
-    portfolio = portfolio.mul(scale_down_factors, axis=0)
-    
-    return portfolio.fillna(0)
+    return portfolio.div(portfolio.abs().sum(axis=1), axis=0).fillna(0)
 
 # ==========================================
 # 3. Main Execution Block
@@ -131,7 +116,7 @@ if __name__ == "__main__":
     sector_mapping = pd.read_csv(os.path.join(BASE_DIR, "top_5000_us_by_marketcap.csv")).set_index("symbol")["sector"]
 
     df_volume = pv['Volume']
-    df_vwap = (pv['High'] + pv['Low'] + pv['Adj Close']) / 3
+    df_vwap = (pv['High'] + pv['Low'] + pv['Adj Close']) / 3  # Accurate Daily VWAP approx
     df_adv20 = df_volume.rolling(20).mean()
 
     # Generate Features
@@ -144,26 +129,42 @@ if __name__ == "__main__":
     sectors = sector_mapping.dropna().unique()
     features_list = features.columns.get_level_values(0).unique()
 
-    print(f"\nRunning 6-Month Sector Backtest ({start_date} to {end_date})...")
+    print(f"\nRunning Global Sector-Attribution Backtest ({start_date} to {end_date})...")
     results = []
 
-    for sector in sectors:
-        for feature in features_list:
-            portfolio = generate_sector_portfolio_vectorized(
-                features, universe, start_date, end_date, feature, sector, sector_mapping
-            )
-            
-            if portfolio.abs().sum().sum() == 0:
-                continue
-                
-            # Add , *_ to absorb any additional return values
-            sr, pnl, *_ = backtest_portfolio(
-                portfolio, returns.loc[start_date:end_date], 
-                universe.loc[start_date:end_date], False, False
-            )
-            
-            results.append({"sector": sector, "feature": feature, "sharpe_ratio": sr})
+    returns_subset = returns.loc[start_date:end_date]
 
+    for feature in features_list:
+        # 1. Generate one global portfolio for the feature
+        portfolio = generate_global_sector_neutral_portfolio(
+            features, universe, start_date, end_date, feature, sector_mapping
+        )
+        
+        # 2. Calculate the raw daily PnL matrix (stock by stock)
+        daily_stock_pnl = portfolio.shift(1) * returns_subset
+        
+        # 3. Attribute the PnL to specific sectors
+        for sector in sectors:
+            # Get tickers in this sector that exist in our PnL columns
+            sector_tickers = sector_mapping[sector_mapping == sector].index.intersection(daily_stock_pnl.columns)
+            if len(sector_tickers) == 0:
+                continue
+            
+            # Sum the daily PnL of all stocks in this sector
+            sector_daily_pnl = daily_stock_pnl[sector_tickers].sum(axis=1)
+            
+            # Calculate Sharpe Ratio for the sector stream
+            mean_pnl = sector_daily_pnl.mean()
+            std_pnl = sector_daily_pnl.std()
+            
+            if std_pnl != 0 and not np.isnan(std_pnl):
+                sharpe = np.sqrt(252) * (mean_pnl / std_pnl)
+            else:
+                sharpe = 0.0
+                
+            results.append({"sector": sector, "feature": feature, "sharpe_ratio": sharpe})
+
+    # 4. Process and print results
     results_df = pd.DataFrame(results)
     best_alphas_idx = results_df.groupby("sector")["sharpe_ratio"].idxmax()
     best_alphas = results_df.loc[best_alphas_idx].sort_values(by="sharpe_ratio", ascending=False)
