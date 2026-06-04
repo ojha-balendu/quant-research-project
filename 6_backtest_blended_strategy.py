@@ -2,9 +2,13 @@ import os
 import pandas as pd
 import numpy as np
 import warnings
+import importlib.util
 
-# Import the robust engine we built in the previous step
-from 5_test_worldquant_alphas import WorldQuantAlphas 
+# Dynamically import the engine because the filename starts with a number
+spec = importlib.util.spec_from_file_location("wq_module", "5_test_worldquant_alphas.py")
+wq_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(wq_module)
+WorldQuantAlphas = wq_module.WorldQuantAlphas
 
 warnings.filterwarnings("ignore")
 
