@@ -22,7 +22,7 @@ pv = pd.read_parquet(os.path.join(BASE_DIR, "all_prices_5000_tickers.parquet"), 
 # %%
 #Calcuate Average Daily Volume for trailing 20 days
 df_daily_volume = pv['Close'].mul(pv['Volume']).fillna(0)
-df_average_daily_volume = df_daily_volume.rolling(window=20, min_periods=1).mean()
+df_average_daily_volume = df_daily_volume.rolling(window=60, min_periods=20).mean()
 
 # %%
 #Creating 5M+ Average Daily Volume Universe
