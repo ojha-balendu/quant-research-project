@@ -1,68 +1,49 @@
-name: Automated Trading Pipeline
+name: QRT Live Trading Pipeline
 
 on:
   schedule:
-    - cron: '0 20 * * 1-5' # Runs at 20:00 every weekday
-  workflow_dispatch:
+    # Runs at 21:00 UTC (2:30 AM IST) Tuesday through Saturday
+    # This guarantees the US market is closed and Yahoo Finance data is finalized
+    - cron: '0 21 * * 1-6'
+  workflow_dispatch: # Allows you to click "Run workflow" manually for testing
 
 jobs:
-  run-pipeline:
+  trade:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install Dependencies
+        # Installs all required libraries including paramiko for the SFTP upload
         run: |
-          pip install pandas numpy pyarrow requests tqdm plotly joblib yfinance paramiko
+          pip install pandas numpy pyarrow paramiko yfinance scipy joblib
 
-      - name: Download Pricing Data
-        run: python yfinance_download.py --input top_5000_us_by_marketcap.csv --output all_prices_5000_tickers.parquet
-
-      - name: Create Universe and Returns
-        run: python 1_create_universe_and_returns.py
-
-      - name: Create Features
-        run: python 2_create_features.py
-
-      - name: Run Strategy and Generate Targets
-        run: python run_strategy.py
-
-      - name: Upload to QSEC
+      - name: Download Latest Market Data
         run: |
-          python << 'EOF'
-          import os
-          from pathlib import Path
-          import pandas as pd
-          from qsec_upload import upload_targets_file, prepare_targets_file, Region, validate_targets_file
-          
-          targets_csv_dir = Path("targets")
-          # The prepare script will format it according to the QSEC format and emit a new CSV
-          targets_df = pd.read_csv(targets_csv_dir / "targets.csv")
-          
-          group_id = "IND03" # Make sure this matches your actual QRT Group ID
-          region = Region.AMER
-          
-          # This writes the formatted csv
-          formatted_csv_path = prepare_targets_file(targets_df, group_id, region, targets_csv_dir)
-          
-          # Validate and Upload
-          errors = validate_targets_file(formatted_csv_path)
-          if errors:
-              print(errors)
-              exit(1)
-              
-          # Execute upload
-          upload_targets_file(
-              targets_csv_path=formatted_csv_path,
-              region=region,
-              sftp_username="q5106", # Ensure this is your correct SFTP username
-              private_key_path=Path("ind03_id_rsa"),
-              sftp_host="sftp.qrt.cloud",
-          )
-          EOF
+          python yfinance_download.py --input top_5000_us_by_marketcap.csv --output all_prices_5000_tickers.parquet
+
+      - name: Generate Universe & Returns
+        run: |
+          python 1_create_universe_and_returns.py
+
+      - name: Run WorldQuant Strategy & Generate Targets
+        run: |
+          python run_strategy.py
+
+      - name: Upload Targets to QSEC SFTP
+        env:
+          # You must add these exact two names in your GitHub Repository Secrets
+          SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+        run: |
+          # Safely write the private key from secrets into a local file for Paramiko
+          echo "$SFTP_PRIVATE_KEY" > private_key.pem
+          chmod 600 private_key.pem
+          python qsec_upload.py
