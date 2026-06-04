@@ -132,7 +132,7 @@ if __name__ == "__main__":
     final_targets = target_notional[target_notional != 0].dropna()
 
     targets_df = pd.DataFrame({
-        "internal_code": final_targets.index,
+        "internal_code": final_targets.index + ".OQ",  # <--- Adds .OQ to every ticker
         "target_notional": final_targets.values,
         "currency": "USD"
     })
