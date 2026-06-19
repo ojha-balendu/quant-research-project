@@ -1,6 +1,6 @@
 # %% [markdown]
 # Notebook to use Yahoo data for creating universe and returns
-
+# this was made by balendu shekhar ojha
 # %%
 # Importing libraries
 import pandas as pd
